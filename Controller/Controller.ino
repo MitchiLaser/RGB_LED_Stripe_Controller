@@ -9,8 +9,8 @@
 
 // Pin definitions
 #define PinRed D2
-#define PinGreen D3
-#define PinBlue D1
+#define PinGreen D1
+#define PinBlue D3
 
 
 // some global variables:
@@ -102,6 +102,12 @@ void setup( void ) {
   if (serial) {
     last_ip_poll = millis();
   }
+
+
+  // initialise output pins
+  pinMode(PinRed, OUTPUT);
+  pinMode(PinGreen, OUTPUT);
+  pinMode(PinBlue, OUTPUT);
 
   // initialisation-state of the animation
   animState = 0;
