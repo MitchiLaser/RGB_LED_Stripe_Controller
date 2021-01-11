@@ -1,16 +1,13 @@
+#include <Arduino.h>
 #include <ESP8266WiFi.h>
 #include <WiFiClient.h>
 #include <ESP8266WebServer.h>
-#include <DNSServer.h>
+#include <WiFiClient.h>
+#include <ESP8266HTTPClient.h>
 
 
 // optional you can enable/disable serial status-information
-#define serial true
-
-// Pin definitions
-#define PinRed D2
-#define PinGreen D1
-#define PinBlue D3
+#define serial false
 
 
 // some global variables:
@@ -19,34 +16,25 @@
 unsigned long last_ip_poll;
 const int delay_between_ip_poll = 5000;
 
-// get the status, if the animation is running
-bool animation_running;
-
-// the current position of the animation
-int animState;
-
-// the colors of the animation
-int animColors[3];
-
-// delays for the animation
-unsigned long lastAnimPoll;
-int delayAnim = 100;
-
 
 // set up the access point
-const char* ssid = "LED-Streifen";
-const char* password = "12345678";
+const char* ssid = "SSID";
+const char* password = "Password";
 
 
-// set up the dns server
-const byte DNS_PORT = 53;
-IPAddress apIP(192, 168, 4, 1);
-DNSServer dnsServer;
-const char* dns_adresse = "*";
+// the ip adresses of the other LED stripes
+const String Adresses[] = {"192.168.0.245", "192.168.0.240"};
+const unsigned int numAdresses = 2;
 
 
 // initialise the server
 ESP8266WebServer server(80);
+
+// an instance of the WiFi Client
+WiFiClient client;
+
+// an instance of the HTTP Client
+HTTPClient http;
 
 
 // ---------------------------- The setup routine ----------------------------
@@ -60,17 +48,20 @@ void setup( void ) {
   }
 
   // open the wifi access point
-  WiFi.mode(WIFI_AP);
-  WiFi.softAP(ssid, password);
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(ssid, password);
 
   //      Optional configuration for channel and hidden ssid and ip-adresse of the access-point
   //      the function returns true / false if it succeed. maybe if the connesctioncolud not been opened, ask the user what to do via serial monitor
 
   // display the ip adresse of the access point
   if (serial) {
-    IPAddress myIP = WiFi.softAPIP();
+    while (WiFi.status() != WL_CONNECTED) {
+      delay(500);
+      Serial.print(".");
+    }
     Serial.print("Access Point IP address: ");
-    Serial.println(myIP);
+    Serial.println(WiFi.localIP());
   }
 
 
@@ -91,41 +82,17 @@ void setup( void ) {
     Serial.println("HTTP server started");
   }
 
-
-  // start dns server
-  dnsServer.start(DNS_PORT, dns_adresse, apIP);
-
-
   // initialisations:
 
   // initialise the variable to display the ip adresse
   if (serial) {
     last_ip_poll = millis();
   }
-
-
-  // initialise output pins
-  pinMode(PinRed, OUTPUT);
-  pinMode(PinGreen, OUTPUT);
-  pinMode(PinBlue, OUTPUT);
-
-  // initialisation-state of the animation
-  animState = 0;
-  animation_running = true;
-  lastAnimPoll = millis();
-
-  // init animation colors
-  animColors[0] = 255;
-  animColors[1] = 0;
-  animColors[2] = 0;
 }
 
 
 // ---------------------------- The loop routine ----------------------------
 void loop( void ) {
-  // make the dns server run
-  dnsServer.processNextRequest();
-
 
   // make the server run
   server.handleClient();
@@ -138,15 +105,6 @@ void loop( void ) {
       Serial.println(myIP);
       last_ip_poll = millis();
     }
-  }
-
-  // if the animation is activated, make it run
-  if (animation_running && (millis() - lastAnimPoll) > delayAnim) {
-    lastAnimPoll = millis();
-    animation();
-    analogWrite(PinRed, animColors[0] * 4);
-    analogWrite(PinGreen, animColors[1] * 4);
-    analogWrite(PinBlue, animColors[2] * 4);
   }
 }
 
@@ -161,11 +119,20 @@ void handleRoot( void ) {
 
 // when new color received, activate it
 void handlePower( void ) {
-  animation_running = false;
+  // set the color
 
-  analogWrite(PinRed, server.arg("r").toInt() * 4);
-  analogWrite(PinGreen, server.arg("g").toInt() * 4);
-  analogWrite(PinBlue, server.arg("b").toInt() * 4);
+  int r = server.arg("r").toInt();
+  int g = server.arg("g").toInt();
+  int b = server.arg("b").toInt();
+
+  String Colors = "/power?r=" + String(r) + "&g=" + String(g) + "&b=" + String(b);
+
+  for (int i = 0; i < numAdresses; i++) {
+    http.begin(client, "http://" + Adresses[i] + Colors);
+    http.GET();
+    http.end();
+  }
+
 
   // ACK
   server.send ( 201, "text/plain", "");
@@ -175,67 +142,13 @@ void handlePower( void ) {
 // when the client tells the server to start an animation, do this
 void handleAnimation( void ) {
   // start the animation
-  animation_running = true;
-  lastAnimPoll = millis();
 
-  // init animation colors
-  animColors[0] = 255;
-  animColors[1] = 0;
-  animColors[2] = 0;
-
-  animState = 0;
+  for (int i = 0; i < numAdresses; i++) {
+    http.begin(client, "http://" + Adresses[i] + "/animation");
+    http.GET();
+    http.end();
+  }
 
   // ACK
   server.send ( 201, "text/plain", "");
 }
-
-
-
-// ---------------------------- The animation ----------------------------
-void animation() {
-  switch (animState) {
-
-    // green is ingreasing until yellow
-    case 0:
-      animColors[1]++;
-      if (animColors[1] >= 255)
-        animState++;
-      break;
-
-    // red is degreesing until green
-    case 1:
-      animColors[0]--;
-      if (animColors[0] <= 0)
-        animState++;
-      break;
-
-    // blue is ingreasing until turquise
-    case 2:
-      animColors[2]++;
-      if (animColors[2] >= 255)
-        animState++;
-      break;
-
-    // green is degreesing until blue
-    case 3:
-      animColors[1]--;
-      if (animColors[1] <= 0)
-        animState++;
-      break;
-
-    // red is ingreasing until violet
-    case 4:
-      animColors[0]++;
-      if (animColors[0] >= 255)
-        animState++;
-      break;
-
-    // blue is degreesing until red
-    case 5:
-      animColors[2]--;
-      if (animColors[2] <= 0)
-        animState = 0;;
-      break;
-  }
-}
-
